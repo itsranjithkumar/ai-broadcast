@@ -19,9 +19,15 @@ export default function Home() {
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioData, setAudioData] = useState<Uint8Array | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
+  const animationIdRef = useRef<number | null>(null);
+  const lyricScrollRef = useRef<HTMLDivElement>(null);
   
-  // Convert VOICE_PRESETS to array for rendering
   const voices = Object.entries(VOICE_PRESETS).map(([id, voice]) => ({
     id,
     name: voice.name,
@@ -29,9 +35,9 @@ export default function Home() {
   }));
 
   const videoStyles = [
-    { id: 'karaoke', name: 'Karaoke Style' },
-    { id: 'quote', name: 'Quote Builder' },
-    { id: 'story', name: 'Story Mode' },
+    { id: 'karaoke', name: 'Karaoke' },
+    { id: 'quote', name: 'Quote' },
+    { id: 'story', name: 'Story' },
   ];
 
   const handleGenerate = async () => {
@@ -41,7 +47,6 @@ export default function Home() {
     setAudioUrl(null);
     
     try {
-      // Call our API route to generate speech
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: {
@@ -60,20 +65,17 @@ export default function Home() {
 
       const { audio } = await response.json();
       
-      // Convert base64 audio to a playable URL
       const audioBlob = base64ToBlob(audio, 'audio/mp3');
       const audioUrl = URL.createObjectURL(audioBlob);
       setAudioUrl(audioUrl);
       
     } catch (error) {
       console.error('Error generating speech:', error);
-      // TODO: Show error message to user
     } finally {
       setIsGenerating(false);
     }
   };
   
-  // Helper function to convert base64 to Blob
   function base64ToBlob(base64: string, type: string) {
     const byteCharacters = atob(base64);
     const byteNumbers = new Array(byteCharacters.length);
@@ -86,7 +88,6 @@ export default function Home() {
     return new Blob([byteArray], { type });
   }
   
-  // Handle play/pause of audio
   const togglePlayPause = () => {
     if (!audioRef.current) return;
     
@@ -98,201 +99,343 @@ export default function Home() {
     
     setIsPlaying(!isPlaying);
   };
+
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setCurrentTime(audioRef.current.currentTime);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (audioRef.current) {
+      setDuration(audioRef.current.duration);
+    }
+  };
+
+  // Split text into lines for lyric display
+  const lyricLines = inputText.split('\n').filter(line => line.trim());
   
-  // Clean up audio URL on unmount
+  // Calculate word count per line and total words
+  const wordsPerLine = lyricLines.map(line => line.split(/\s+/).filter(Boolean).length);
+  const totalWords = wordsPerLine.reduce((sum, count) => sum + count, 0);
+  
+  // Calculate current word index based on audio progress
+  const currentWordIndex = duration > 0 
+    ? Math.floor((currentTime / duration) * totalWords)
+    : 0;
+  
+  // Find which line we're currently on based on word count
+  let currentLineIndex = 0;
+  let wordCount = 0;
+  
+  for (let i = 0; i < wordsPerLine.length; i++) {
+    wordCount += wordsPerLine[i];
+    if (currentWordIndex < wordCount) {
+      currentLineIndex = i;
+      break;
+    }
+  }
+
+  // Store previous line index to detect changes
+  const prevLineIndexRef = useRef(0);
+
+  // Auto-scroll lyrics when line changes
+  useEffect(() => {
+    const scrollElement = lyricScrollRef.current;
+    if (!scrollElement || currentLineIndex === prevLineIndexRef.current) return;
+    
+    // Only scroll when moving to a new line
+    if (currentLineIndex > prevLineIndexRef.current) {
+      const lyricElements = Array.from(scrollElement.querySelectorAll('div[class*="text-center"]'));
+      if (lyricElements.length === 0 || currentLineIndex >= lyricElements.length) return;
+
+      const activeLine = lyricElements[currentLineIndex];
+      if (!activeLine) return;
+
+      const containerHeight = scrollElement.clientHeight;
+      const activeLineRect = activeLine.getBoundingClientRect();
+      const containerRect = scrollElement.getBoundingClientRect();
+      const scrollTop = scrollElement.scrollTop;
+      const lineTop = activeLineRect.top - containerRect.top + scrollTop;
+      const lineHeight = activeLineRect.height;
+      
+      // Calculate target scroll position to show current and next line
+      const targetScrollTop = lineTop - (containerHeight / 2) + (lineHeight / 2);
+      
+      // Smooth scroll to the target position
+      scrollElement.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+    }
+    
+    prevLineIndexRef.current = currentLineIndex;
+  }, [currentLineIndex]);
+
+  const handleDownload = () => {
+    if (!audioUrl) return;
+    const a = document.createElement('a');
+    a.href = audioUrl;
+    a.download = 'voiceover.mp3';
+    a.click();
+  };
+  
   useEffect(() => {
     return () => {
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl);
       }
+      if (animationIdRef.current) {
+        cancelAnimationFrame(animationIdRef.current);
+      }
     };
   }, [audioUrl]);
 
   return (
-    <main className="min-h-screen bg-linear-to-b from-gray-900 to-gray-800 text-white">
-      <div className="container mx-auto p-4 md:p-8">
-        <header className="text-center mb-12">
-          <h1 className="text-5xl font-bold text-transparent bg-clip-text bg-linear-to-r from-blue-400 to-purple-600 mb-4">
+    <main className="min-h-screen bg-black text-white">
+      {/* Background Grid */}
+      <div className="fixed inset-0 opacity-5 pointer-events-none" style={{
+        backgroundImage: `linear-gradient(0deg, transparent 24%, rgba(255, 255, 255, 0.1) 25%, rgba(255, 255, 255, 0.1) 26%, transparent 27%, transparent 74%, rgba(255, 255, 255, 0.1) 75%, rgba(255, 255, 255, 0.1) 76%, transparent 77%, transparent), linear-gradient(90deg, transparent 24%, rgba(255, 255, 255, 0.1) 25%, rgba(255, 255, 255, 0.1) 26%, transparent 27%, transparent 74%, rgba(255, 255, 255, 0.1) 75%, rgba(255, 255, 255, 0.1) 76%, transparent 77%, transparent)`,
+        backgroundSize: '50px 50px',
+      }} />
+      
+      <div className="relative z-10 container mx-auto px-6 py-12 md:py-20 max-w-6xl">
+        {/* Header */}
+        <header className="text-center mb-24">
+          <div className="mb-8">
+            <div className="inline-block px-4 py-2 rounded-full border border-gray-700 bg-gray-900/50 backdrop-blur">
+              <p className="text-sm text-gray-400">Professional AI Voice Generation</p>
+            </div>
+          </div>
+          <h1 className="text-7xl md:text-8xl font-bold tracking-tight mb-6">
             VoxReel
           </h1>
-          <p className="text-xl text-gray-300">
-            Transform text into engaging voice-driven videos
+          <p className="text-xl md:text-2xl text-gray-400 max-w-3xl mx-auto leading-relaxed">
+            Create stunning voice content with advanced AI. Professional quality, instant results.
           </p>
         </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Side: Input */}
-          <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
-            <h2 className="text-2xl font-semibold mb-6">Create Your Video</h2>
-            
-            <div className="space-y-6">
-              <div>
-                <label htmlFor="text-input" className="block text-sm font-medium text-gray-300 mb-2">
-                  Enter your text
-                </label>
-                <textarea
-                  id="text-input"
-                  className="w-full h-48 px-4 py-3 bg-gray-700 rounded-lg text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Type or paste your text here..."
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Voice Style
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                  {voices.map((voice) => (
-                    <button
-                      key={voice.id}
-                      className={`px-4 py-2 rounded-lg transition-colors ${
-                        selectedVoice === voice.id
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
-                      onClick={() => setSelectedVoice(voice.id)}
-                    >
-                      {voice.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Video Style
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                  {videoStyles.map((style) => (
-                    <button
-                      key={style.id}
-                      className={`px-4 py-2 rounded-lg transition-colors ${
-                        selectedStyle === style.id
-                          ? 'bg-purple-600 text-white'
-                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                      }`}
-                      onClick={() => setSelectedStyle(style.id as VideoStyle)}
-                    >
-                      {style.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                className={`w-full py-3 px-6 rounded-lg font-medium transition-colors ${
-                  isGenerating || !inputText.trim()
-                    ? 'bg-gray-600 cursor-not-allowed'
-                    : 'bg-linear-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700'
-                }`}
-                onClick={handleGenerate}
-                disabled={isGenerating || !inputText.trim()}
-              >
-                {isGenerating ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Generating...
-                  </>
-                ) : (
-                  'Generate Audio'
-                )}
-              </button>
+        {/* Main Grid Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-24">
+          {/* Left Column: Input Section */}
+          <div className="space-y-8">
+            {/* Text Input */}
+            <div>
+              <label htmlFor="text-input" className="block text-sm font-medium text-gray-300 mb-4">
+                Your Script
+              </label>
+              <textarea
+                id="text-input"
+                className="w-full h-48 px-4 py-3 bg-gray-950 border border-gray-800 rounded-lg text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-white focus:border-transparent transition-all resize-none"
+                placeholder="Enter your text, story, or quote..."
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+              />
+              <p className="text-xs text-gray-600 mt-2">{inputText.length} characters</p>
             </div>
+
+            {/* Voice Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-4">
+                Voice
+              </label>
+              <div className="space-y-3">
+                {voices.map((voice) => (
+                  <button
+                    key={voice.id}
+                    onClick={() => setSelectedVoice(voice.id)}
+                    className={`w-full p-4 rounded-lg text-left transition-all duration-200 border ${
+                      selectedVoice === voice.id
+                        ? 'bg-white text-black border-white'
+                        : 'bg-gray-900 border-gray-800 hover:border-gray-700 text-white'
+                    }`}
+                  >
+                    <p className="font-medium text-sm">{voice.name}</p>
+                    <p className={`text-xs ${selectedVoice === voice.id ? 'text-gray-700' : 'text-gray-500'}`}>
+                      {voice.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Video Style Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-4">
+                Style
+              </label>
+              <div className="grid grid-cols-3 gap-3">
+                {videoStyles.map((style) => (
+                  <button
+                    key={style.id}
+                    onClick={() => setSelectedStyle(style.id as VideoStyle)}
+                    className={`p-4 rounded-lg transition-all duration-200 border text-center font-medium ${
+                      selectedStyle === style.id
+                        ? 'bg-white text-black border-white'
+                        : 'bg-gray-900 border-gray-800 hover:border-gray-700 text-white'
+                    }`}
+                  >
+                    <p className="text-sm">{style.name}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Generate Button */}
+            <button
+              className={`w-full py-4 px-6 rounded-lg font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                isGenerating || !inputText.trim()
+                  ? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                  : 'bg-white text-black hover:bg-gray-100 active:scale-95'
+              }`}
+              onClick={handleGenerate}
+              disabled={isGenerating || !inputText.trim()}
+            >
+              {isGenerating ? (
+                <>
+                  <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Generating...
+                </>
+              ) : (
+                'Generate Audio'
+              )}
+            </button>
           </div>
 
-          {/* Right Side: Preview */}
-          <div className="bg-gray-800 rounded-xl p-6 shadow-lg">
-            <h2 className="text-2xl font-semibold mb-6">Preview</h2>
-            
-            <div className="aspect-9/16 bg-gray-900 rounded-lg overflow-hidden flex flex-col">
-              <div className="flex-1 flex items-center justify-center p-6">
+          {/* Right Column: Preview Section */}
+          <div>
+            {/* Video Preview Container */}
+            <div className="border border-gray-800 rounded-lg overflow-hidden flex flex-col h-96 bg-gray-900">
+              {/* Lyrics Display Section */}
+              <div 
+                ref={lyricScrollRef}
+                className="flex-1 overflow-y-auto px-8 py-8 scroll-smooth"
+                style={{
+                  scrollBehavior: 'smooth',
+                  scrollbarWidth: 'thin',
+                }}
+              >
                 {audioUrl ? (
-                  <div className="text-center">
-                    <button
-                      onClick={togglePlayPause}
-                      className="w-20 h-20 rounded-full bg-blue-600 hover:bg-blue-700 flex items-center justify-center mb-4 mx-auto transition-colors"
-                      aria-label={isPlaying ? 'Pause' : 'Play'}
-                    >
-                      {isPlaying ? (
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      ) : (
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      )}
-                    </button>
-                    <p className="text-gray-300 mt-2">
-                      {isPlaying ? 'Playing...' : 'Audio ready'}
-                    </p>
-                    <audio
-                      ref={audioRef}
-                      src={audioUrl}
-                      onEnded={() => setIsPlaying(false)}
-                      className="hidden"
-                    />
+                  <div className="space-y-4">
+                    <div className="h-20" />
+                    {lyricLines.length > 0 ? (
+                      lyricLines.map((line, idx) => (
+                        <div 
+                          key={idx}
+                          className={`text-center transition-all duration-300 px-4 py-2 rounded-lg ${
+                            idx === currentLineIndex
+                              ? 'text-white text-2xl font-semibold bg-gray-800 scale-105'
+                              : idx < currentLineIndex
+                              ? 'text-gray-700 text-lg opacity-50'
+                              : 'text-gray-600 text-lg'
+                          }`}
+                        >
+                          {line}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center text-gray-600">No lyrics to display</div>
+                    )}
+                    <div className="h-20" />
                   </div>
                 ) : (
-                  <div className="text-center p-8 text-gray-500">
-                    <div className="mx-auto w-16 h-16 mb-4 border-4 border-dashed border-gray-700 rounded-full flex items-center justify-center">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-8 w-8"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-6-9a4 4 0 01-4-4V5a4 4 0 118 0v6a4 4 0 01-4 4z"
-                        />
-                      </svg>
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center">
+                      <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gray-800 border-2 border-gray-700 flex items-center justify-center">
+                        <svg className="h-10 w-10 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-6-9a4 4 0 01-4-4V5a4 4 0 118 0v6a4 4 0 01-4 4z" />
+                        </svg>
+                      </div>
+                      <h3 className="text-xl font-semibold text-white mb-2">Ready to create?</h3>
+                      <p className="text-gray-500">Enter your text and generate to see lyrics</p>
                     </div>
-                    <p>Your generated audio will appear here</p>
-                    <p className="text-sm mt-2 text-gray-600">
-                      Enter text and click "Generate Audio" to create your content
-                    </p>
                   </div>
                 )}
               </div>
               
-              {/* Audio visualization placeholder */}
-              <div className="h-24 bg-gray-800 p-4">
-                <div className="flex items-end h-full space-x-1">
-                  {Array.from({ length: 20 }).map((_, i) => (
-                    <div 
-                      key={i}
-                      className="flex-1 bg-blue-500 rounded-t-sm transition-all duration-300"
-                      style={{
-                        height: `${Math.random() * 60 + 20}%`,
-                        animation: isPlaying ? `equalize ${Math.random() * 0.5 + 0.5}s infinite alternate` : 'none',
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
+              {/* Player Controls */}
+              {audioUrl && (
+                <>
+                  {/* Progress Bar and Controls */}
+                  <div className="border-t border-gray-800 bg-gray-950 p-6 space-y-4">
+                    {/* Time and Progress */}
+                    <div>
+                      <div className="w-full h-1 bg-gray-800 rounded-full overflow-hidden cursor-pointer">
+                        <div 
+                          className="h-full bg-white transition-all duration-75"
+                          style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs text-gray-600 mt-2">
+                        <span>{Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, '0')}</span>
+                        <span>{Math.floor(duration / 60)}:{String(Math.floor(duration % 60)).padStart(2, '0')}</span>
+                      </div>
+                    </div>
+                    
+                    {/* Control Buttons */}
+                    <div className="flex items-center justify-center gap-4">
+                      <button
+                        onClick={togglePlayPause}
+                        className="w-12 h-12 rounded-full bg-white hover:bg-gray-100 text-black flex items-center justify-center transition-all active:scale-95"
+                        aria-label={isPlaying ? 'Pause' : 'Play'}
+                      >
+                        {isPlaying ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 fill-black" viewBox="0 0 24 24">
+                            <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 fill-black ml-0.5" viewBox="0 0 24 24">
+                            <path d="M8 5v14l11-7z" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <audio
+                ref={audioRef}
+                src={audioUrl || ''}
+                onEnded={() => setIsPlaying(false)}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                className="hidden"
+              />
             </div>
 
-            {videoUrl && (
-              <div className="mt-4 flex justify-center space-x-4">
-                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+            {/* Action Buttons */}
+            {audioUrl && (
+              <div className="mt-6 flex gap-3 justify-center">
+                <button 
+                  onClick={handleDownload}
+                  className="px-6 py-3 bg-gray-900 border border-gray-800 text-white rounded-lg font-medium transition-all hover:bg-gray-800 active:scale-95"
+                >
                   Download
                 </button>
-                <button className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+                <button className="px-6 py-3 bg-white text-black rounded-lg font-medium transition-all hover:bg-gray-100 active:scale-95">
                   Share
                 </button>
               </div>
             )}
           </div>
+        </div>
+
+        {/* Features Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 pt-12 border-t border-gray-800">
+          {[
+            { title: 'Multiple Voices', desc: 'Professional voice options' },
+            { title: 'Video Modes', desc: 'Karaoke, Quote & Story styles' },
+            { title: 'Instant Generation', desc: 'Create content in seconds' },
+          ].map((feature, idx) => (
+            <div key={idx} className="text-center">
+              <h3 className="font-medium text-lg text-white mb-2">{feature.title}</h3>
+              <p className="text-gray-500 text-sm">{feature.desc}</p>
+            </div>
+          ))}
         </div>
       </div>
     </main>
