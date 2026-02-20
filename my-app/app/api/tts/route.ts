@@ -1,33 +1,41 @@
-import { NextResponse } from 'next/server';
-import { generateSpeech, VOICE_PRESETS } from '@/lib/tts';
+import { NextResponse } from "next/server";
+import { Buffer } from "buffer";
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const body = await req.json();
+    const { text } = body;
 
-    if (!text) {
+    if (!text || typeof text !== "string") {
       return NextResponse.json(
-        { error: 'Text is required' },
+        { error: "Text is required" },
         { status: 400 }
       );
     }
 
-    if (!process.env.ELEVENLABS_API_KEY) {
-      throw new Error('Missing ELEVENLABS_API_KEY');
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+
+    if (!apiKey) {
+      console.error("❌ ELEVENLABS_API_KEY missing");
+      return NextResponse.json(
+        { error: "Server misconfiguration" },
+        { status: 500 }
+      );
     }
 
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM`,
+    const elevenResponse = await fetch(
+      "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM",
       {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          "Content-Type": "application/json",
+          "xi-api-key": apiKey,
         },
         body: JSON.stringify({
           text,
+          model_id: "eleven_monolingual_v1",
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.5,
@@ -36,17 +44,28 @@ export async function POST(req: Request) {
       }
     );
 
-    if (!response.ok) {
-      const error = await response.json();
-      console.error('ElevenLabs API error:', error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (!elevenResponse.ok) {
+      const errorText = await elevenResponse.text();
+      console.error("❌ ElevenLabs error:", errorText);
+
+      return NextResponse.json(
+        { error: "ElevenLabs TTS failed" },
+        { status: 500 }
+      );
     }
 
-    const audioData = await response.arrayBuffer();
-    const base64Audio = Buffer.from(audioData).toString('base64');
-    return NextResponse.json({ success: true, audio: base64Audio }, { status: 200 });
-  } catch (error: any) {
-    console.error('Error generating speech:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const audioBuffer = await elevenResponse.arrayBuffer();
+    const base64Audio = Buffer.from(audioBuffer).toString("base64");
+
+    return NextResponse.json({
+      success: true,
+      audio: base64Audio,
+    });
+  } catch (err: any) {
+    console.error("❌ TTS API crash:", err);
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }
