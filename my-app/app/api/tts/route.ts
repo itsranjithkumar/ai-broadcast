@@ -42,8 +42,4 @@ export async function POST(request: Request) {
 }
 
 // Enable CORS for the API route
-export const config = {
-  api: {
-    responseLimit: false,
-  },
-};
+export const runtime = 'edge';
