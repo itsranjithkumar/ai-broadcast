@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { generateSpeech, VOICE_PRESETS } from '@/lib/tts';
 
-export async function POST(request: Request) {
+export const runtime = 'nodejs';
+
+export async function POST(req: Request) {
   try {
-    const { text, voiceId = 'default' } = await request.json();
-    
+    const { text } = await req.json();
+
     if (!text) {
       return NextResponse.json(
         { error: 'Text is required' },
@@ -12,31 +14,39 @@ export async function POST(request: Request) {
       );
     }
 
-    // Get voice settings from presets
-    const voice = VOICE_PRESETS[voiceId as keyof typeof VOICE_PRESETS] || VOICE_PRESETS.default;
-    
-    // Generate speech using ElevenLabs API
-    const audioData = await generateSpeech({
-      text,
-      voiceId: voice.id,
-    });
+    if (!process.env.ELEVENLABS_API_KEY) {
+      throw new Error('Missing ELEVENLABS_API_KEY');
+    }
 
-    // Return the audio data as a base64 string
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+        },
+        body: JSON.stringify({
+          text,
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('ElevenLabs API error:', error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const audioData = await response.arrayBuffer();
     const base64Audio = Buffer.from(audioData).toString('base64');
-    
-    return NextResponse.json({
-      audio: base64Audio,
-      voice: voice.name,
-    });
-    
-  } catch (error) {
-    console.error('TTS generation error:', error);
-    return NextResponse.json({
-      error: error instanceof Error ? error.message : 'Failed to generate speech',
-      details: error instanceof Error ? error.stack : null
-    }, { status: 500 });
+    return NextResponse.json({ success: true, audio: base64Audio }, { status: 200 });
+  } catch (error: any) {
+    console.error('Error generating speech:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
-
-// Enable CORS for the API route
-export const runtime = 'edge';
