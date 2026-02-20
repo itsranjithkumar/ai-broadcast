@@ -31,13 +31,10 @@ export async function POST(request: Request) {
     
   } catch (error) {
     console.error('TTS generation error:', error);
-    return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : 'Failed to generate speech',
-        details: error instanceof Error ? error.stack : null
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : 'Failed to generate speech',
+      details: error instanceof Error ? error.stack : null
+    }, { status: 500 });
   }
 }
 
